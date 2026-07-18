@@ -111,6 +111,8 @@ function PolicyApp() {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
+  const [mobileTab, setMobileTab] = useState("document"); // "chat" | "document" — only used on narrow screens
   const pendingVersionRef = useRef(null);
   const chatEndRef = useRef(null);
   const editFlashTimer = useRef(null);
@@ -137,6 +139,14 @@ function PolicyApp() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy]);
+
+  useEffect(() => {
+    function handleResize() {
+      setIsMobile(window.innerWidth < 820);
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     loadLibrary();
@@ -273,6 +283,7 @@ function PolicyApp() {
     setError("");
     setMessages((m) => [...m, { role: "user", text: ask }]);
     setBusy(true);
+    if (isMobile) setMobileTab("document");
     const controller = new AbortController();
     abortRef.current = controller;
     const myToken = ++cancelTokenRef.current;
@@ -485,34 +496,34 @@ function PolicyApp() {
       `}</style>
 
       {/* Header */}
-      <div style={{ padding: "16px 24px", borderBottom: `1px solid ${RULE}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: SURFACE }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 26, height: 26, borderRadius: 7, background: ACCENT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ padding: isMobile ? "12px 14px" : "16px 24px", borderBottom: `1px solid ${RULE}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: SURFACE, gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 10, minWidth: 0 }}>
+          <div style={{ width: 26, height: 26, borderRadius: 7, background: ACCENT, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
             <FileText size={14} color="#fff" strokeWidth={2} />
           </div>
-          <span style={{ fontSize: 16, fontWeight: 300, letterSpacing: "0.01em" }}>Policy Editor</span>
+          {!isMobile && <span style={{ fontSize: 16, fontWeight: 300, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>Policy Editor</span>}
           <button
             className="pc-btn"
             onClick={() => setDark((d) => !d)}
             title={dark ? "Switch to light mode" : "Switch to dark mode"}
-            style={{ ...iconBtn(RULE), marginLeft: 2 }}
+            style={{ ...iconBtn(RULE), marginLeft: 2, flexShrink: 0 }}
           >
             {dark ? <Sun size={14} color={MUTED} /> : <Moon size={14} color={MUTED} />}
           </button>
           <UserButton afterSignOutUrl="/" />
-          {phase === "chat" && saveStatus && (
-            <span style={{ fontSize: 11.5, color: saveStatus === "saved" ? "#2E9B5F" : saveStatus === "error" ? "#C0392B" : MUTED, marginLeft: 4 }}>
+          {phase === "chat" && saveStatus && !isMobile && (
+            <span style={{ fontSize: 11.5, color: saveStatus === "saved" ? "#2E9B5F" : saveStatus === "error" ? "#C0392B" : MUTED, marginLeft: 4, whiteSpace: "nowrap" }}>
               {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Couldn't save — check storage setup" : "Saved"}
             </span>
           )}
         </div>
         {phase === "chat" && (
-          <button className="pc-btn" onClick={backToLibrary} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${RULE}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 300, color: MUTED, cursor: "pointer" }}>
-            <RotateCcw size={12} /> My policies
+          <button className="pc-btn" onClick={backToLibrary} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${RULE}`, borderRadius: 8, padding: isMobile ? "7px 10px" : "7px 13px", fontSize: 12.5, fontWeight: 300, color: MUTED, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+            <RotateCcw size={12} /> {isMobile ? "" : "My policies"}
           </button>
         )}
         {phase === "paste" && (
-          <button className="pc-btn" onClick={backToLibrary} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${RULE}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 300, color: MUTED, cursor: "pointer" }}>
+          <button className="pc-btn" onClick={backToLibrary} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${RULE}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 300, color: MUTED, cursor: "pointer", flexShrink: 0 }}>
             Cancel
           </button>
         )}
@@ -682,8 +693,51 @@ function PolicyApp() {
       )}
 
       {phase === "chat" && (
-        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "minmax(320px, 44%) 1fr", minHeight: 0 }}>
-          <div style={{ display: "flex", flexDirection: "column", borderRight: `1px solid ${RULE}`, minHeight: 0, background: SURFACE }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          {isMobile && (
+            <div style={{ display: "flex", gap: 6, padding: "10px 16px", borderBottom: `1px solid ${RULE}`, background: SURFACE, flexShrink: 0 }}>
+              <button
+                className="pc-btn"
+                onClick={() => setMobileTab("document")}
+                style={{
+                  flex: 1,
+                  padding: "8px 0",
+                  borderRadius: 8,
+                  border: "none",
+                  background: mobileTab === "document" ? ACCENT : "transparent",
+                  color: mobileTab === "document" ? "#fff" : MUTED,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Document
+              </button>
+              <button
+                className="pc-btn"
+                onClick={() => setMobileTab("chat")}
+                style={{
+                  flex: 1,
+                  padding: "8px 0",
+                  borderRadius: 8,
+                  border: "none",
+                  background: mobileTab === "chat" ? ACCENT : "transparent",
+                  color: mobileTab === "chat" ? "#fff" : MUTED,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  position: "relative",
+                }}
+              >
+                Chat
+                {busy && mobileTab !== "chat" && (
+                  <span style={{ position: "absolute", top: 6, right: "28%", width: 6, height: 6, borderRadius: "50%", background: mobileTab === "chat" ? "#fff" : ACCENT }} />
+                )}
+              </button>
+            </div>
+          )}
+          <div style={{ flex: 1, display: isMobile ? "block" : "grid", gridTemplateColumns: isMobile ? undefined : "minmax(320px, 44%) 1fr", minHeight: 0 }}>
+          <div style={{ display: isMobile && mobileTab !== "chat" ? "none" : "flex", flexDirection: "column", borderRight: isMobile ? "none" : `1px solid ${RULE}`, minHeight: 0, background: SURFACE, height: isMobile ? "100%" : "auto" }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 8px" }}>
               {messages.map((m, i) => (
                 <div key={i} className="pc-msg" style={{ marginBottom: 14, display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
@@ -764,8 +818,8 @@ function PolicyApp() {
             </div>
           </div>
 
-          <div style={{ overflowY: "auto", padding: "24px 28px", minHeight: 0 }}>
-            <div style={{ background: SURFACE, border: `1px solid ${RULE}`, boxShadow: "0 1px 2px rgba(21,23,30,0.04), 0 10px 30px rgba(21,23,30,0.06)", borderRadius: 16, padding: "32px 36px" }}>
+          <div style={{ display: isMobile && mobileTab !== "document" ? "none" : "block", overflowY: "auto", padding: isMobile ? "16px" : "24px 28px", minHeight: 0, height: isMobile ? "100%" : "auto" }}>
+            <div style={{ background: SURFACE, border: `1px solid ${RULE}`, boxShadow: "0 1px 2px rgba(21,23,30,0.04), 0 10px 30px rgba(21,23,30,0.06)", borderRadius: 16, padding: isMobile ? "22px 20px" : "32px 36px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${RULE}`, paddingBottom: 14, marginBottom: 22 }}>
                 <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: ACCENT, display: "flex", alignItems: "center", gap: 8 }}>
                   {policyTitle || "Working draft"}
@@ -832,8 +886,11 @@ function PolicyApp() {
               />
             </div>
             <p style={{ fontSize: 12, color: MUTED, marginTop: 12 }}>
-              Click directly into the document to fix small things. Use chat on the left for bigger rewrites. Everything saves automatically.
+              {isMobile
+                ? "Tap into the document to fix small things. Use the Chat tab for bigger rewrites. Everything saves automatically."
+                : "Click directly into the document to fix small things. Use chat on the left for bigger rewrites. Everything saves automatically."}
             </p>
+          </div>
           </div>
         </div>
       )}
