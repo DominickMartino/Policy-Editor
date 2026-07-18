@@ -38,7 +38,7 @@ export default async function handler(req, res) {
       if (!raw) return res.status(404).json({ error: "Not found" });
       const existing = JSON.parse(raw);
 
-      const { document, messages, title, versionSnapshot, generateShare, revokeShare, printTheme } = req.body || {};
+      const { document, messages, title, versionSnapshot, generateShare, revokeShare, printTheme, docFont } = req.body || {};
 
       let shareToken = existing.shareToken || null;
       if (generateShare && !shareToken) {
@@ -69,6 +69,7 @@ export default async function handler(req, res) {
         messages: messages ?? existing.messages,
         title: title ?? existing.title,
         printTheme: printTheme ?? existing.printTheme,
+        docFont: docFont ?? existing.docFont,
         versions,
         shareToken,
         updatedAt: Date.now(),

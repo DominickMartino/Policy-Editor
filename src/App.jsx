@@ -112,6 +112,9 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [printTheme, setPrintTheme] = useState("classic");
+  const [docFont, setDocFont] = useState("georgia");
+  const currentTheme = PRINT_THEMES.find((t) => t.id === printTheme) || PRINT_THEMES[0];
+  const currentFont = FONTS.find((f) => f.id === docFont) || FONTS[0];
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
   const [mobileTab, setMobileTab] = useState("document"); // "chat" | "document" — only used on narrow screens
   const pendingVersionRef = useRef(null);
@@ -188,6 +191,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
       setVersions(record.versions || []);
       setShareToken(record.shareToken || null);
       setPrintTheme(record.printTheme || "classic");
+      setDocFont(record.docFont || "georgia");
       setMessages(record.messages && record.messages.length ? record.messages : [
         { role: "assistant", text: `Reopened "${record.title}". Tell me what you'd like to change next.` },
       ]);
@@ -228,6 +232,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
     setVersions([]);
     setShareToken(null);
     setPrintTheme("classic");
+    setDocFont("georgia");
     setMessages(initialMessages);
     setPhase("chat");
 
@@ -244,7 +249,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
     }
   }
 
-  const saveNow = useCallback((doc, msgs, title, id, theme) => {
+  const saveNow = useCallback((doc, msgs, title, id, theme, font) => {
     if (!id) return;
     setSaveStatus("saving");
     clearTimeout(saveDebounce.current);
@@ -258,7 +263,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({ document: doc, messages: msgs, title, versionSnapshot, printTheme: theme }),
+          body: JSON.stringify({ document: doc, messages: msgs, title, versionSnapshot, printTheme: theme, docFont: font }),
         });
         if (!res.ok) throw new Error("save failed");
         const updated = await res.json();
@@ -275,10 +280,10 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
 
   useEffect(() => {
     if (policyId && phase === "chat" && !busy) {
-      saveNow(policyDoc, messages, policyTitle, policyId, printTheme);
+      saveNow(policyDoc, messages, policyTitle, policyId, printTheme, docFont);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [policyDoc, messages, printTheme]);
+  }, [policyDoc, messages, printTheme, docFont]);
 
   async function send() {
     const ask = input.trim();
@@ -376,6 +381,8 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
     setExportingWord(true);
     try {
       const theme = PRINT_THEMES.find((t) => t.id === printTheme) || PRINT_THEMES[0];
+      const font = FONTS.find((f) => f.id === docFont) || FONTS[0];
+      const wordFontName = font.label; // e.g. "Times New Roman", "Arial" — matches real installed font names
       const doc = new Document({
         sections: [
           {
@@ -383,7 +390,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
               (line) =>
                 new Paragraph({
                   children: markdownLiteToRuns(line).map(
-                    (r) => new TextRun({ text: r.text, bold: !!r.bold, italics: !!r.italics, font: theme.fontFamily.split(",")[0].replace(/['"]/g, ""), size: theme.fontSize * 2 })
+                    (r) => new TextRun({ text: r.text, bold: !!r.bold, italics: !!r.italics, font: wordFontName, size: theme.fontSize * 2 })
                   ),
                 })
             ),
@@ -497,10 +504,11 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
 
   function printDoc() {
     const theme = PRINT_THEMES.find((t) => t.id === printTheme) || PRINT_THEMES[0];
+    const font = FONTS.find((f) => f.id === docFont) || FONTS[0];
     const formattedHtml = markdownLiteToHtml(policyDoc);
     const w = window.open("", "_blank");
     w.document.write(`
-      <div style="font-family: ${theme.fontFamily}; font-size: ${theme.fontSize}pt; line-height: ${theme.compact ? 1.4 : 1.7}; white-space: pre-wrap; padding: 48px; max-width: 680px; margin: auto;">
+      <div style="font-family: ${font.family}; font-size: ${theme.fontSize}pt; line-height: ${theme.compact ? 1.4 : 1.7}; white-space: pre-wrap; padding: 48px; max-width: 680px; margin: auto;">
         <div style="text-align: ${theme.headerAlign}; font-weight: bold; font-size: ${theme.fontSize + 3}pt; margin-bottom: 20px;">${escapeHtml(policyTitle || "")}</div>
         ${formattedHtml}
       </div>
@@ -948,7 +956,44 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
                     </option>
                   ))}
                 </select>
+                <select
+                  value={docFont}
+                  onChange={(e) => setDocFont(e.target.value)}
+                  title="Font"
+                  style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${RULE}`, background: SURFACE, color: INK, fontSize: 12, cursor: "pointer", fontFamily: currentFont.family }}
+                >
+                  {FONTS.map((f) => (
+                    <option key={f.id} value={f.id} style={{ fontFamily: f.family }}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              <div
+                style={{
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 10,
+                  padding: "16px 18px",
+                  marginBottom: 14,
+                  background: dark ? "#181A20" : "#FAFAFB",
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: MUTED, marginBottom: 10 }}>
+                  Preview — how it'll print / export
+                </div>
+                <div
+                  style={{
+                    fontFamily: currentFont.family,
+                    fontSize: currentTheme.fontSize + 3,
+                    lineHeight: currentTheme.compact ? 1.4 : 1.7,
+                    color: INK,
+                    whiteSpace: "pre-wrap",
+                  }}
+                  dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(policyDoc) }}
+                />
+              </div>
+
               <textarea
                 ref={docTextareaRef}
                 className="pc-docedit"
@@ -1361,28 +1406,20 @@ function SharedPolicyView({ token }) {
 }
 
 const PRINT_THEMES = [
-  {
-    id: "classic",
-    label: "Classic",
-    fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize: 12,
-    headerAlign: "center",
-  },
-  {
-    id: "modern",
-    label: "Modern",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-    fontSize: 11,
-    headerAlign: "left",
-  },
-  {
-    id: "compact",
-    label: "Compact",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-    fontSize: 10,
-    headerAlign: "left",
-    compact: true,
-  },
+  { id: "classic", label: "Classic", fontSize: 12, headerAlign: "center" },
+  { id: "modern", label: "Modern", fontSize: 11, headerAlign: "left" },
+  { id: "compact", label: "Compact", fontSize: 10, headerAlign: "left", compact: true },
+];
+
+const FONTS = [
+  { id: "georgia", label: "Georgia", family: "Georgia, 'Times New Roman', serif" },
+  { id: "times", label: "Times New Roman", family: "'Times New Roman', Times, serif" },
+  { id: "cambria", label: "Cambria", family: "Cambria, Georgia, serif" },
+  { id: "arial", label: "Arial", family: "Arial, Helvetica, sans-serif" },
+  { id: "helvetica", label: "Helvetica", family: "Helvetica, Arial, sans-serif" },
+  { id: "calibri", label: "Calibri", family: "Calibri, Candara, Arial, sans-serif" },
+  { id: "verdana", label: "Verdana", family: "Verdana, Geneva, sans-serif" },
+  { id: "courier", label: "Courier New", family: "'Courier New', Courier, monospace" },
 ];
 
 function escapeHtml(str) {
