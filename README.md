@@ -114,4 +114,3 @@ full-screen, without browser address bars — no App Store needed.
 
 Do this yourself first to make sure the icon looks right, then you can tell
 Erin (or any practice) to do the same 4-tap process on their own phone.
-

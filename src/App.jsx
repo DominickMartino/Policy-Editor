@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2 } from "lucide-react";
+import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2, History, FileDown, X, Sparkles } from "lucide-react";
 import { SignedIn, SignedOut, SignIn, UserButton, useAuth } from "@clerk/clerk-react";
+import { Document, Packer, Paragraph } from "docx";
 
 const INK = "#15171E";
 const PAPER = "#F2F3F6";
@@ -9,6 +10,52 @@ const ACCENT = "#3654E0";
 const ACCENT_SOFT = "#EEF0FE";
 const MUTED = "#6B7080";
 const RULE = "#E4E5EA";
+
+const TEMPLATES = [
+  {
+    title: "No-Show & Cancellation Policy",
+    text: `NO-SHOW AND CANCELLATION POLICY
+
+We ask patients to give at least 24 hours notice if they need to cancel or reschedule an appointment.
+
+- Missed appointments without notice may result in a $25 fee, charged to the card on file.
+- Two or more missed appointments in a row may require a deposit to book future visits.
+- Fees may be waived for documented emergencies.
+- Patients will be notified of this policy at the time of scheduling.`,
+  },
+  {
+    title: "Patient Privacy Basics",
+    text: `PATIENT PRIVACY POLICY (INTERNAL)
+
+Our practice is committed to protecting patient information.
+
+- Staff should only access patient records needed for their current task.
+- Patient information should never be discussed in public areas of the office.
+- Screens displaying patient information should be locked when unattended.
+- Any suspected privacy incident should be reported to the office manager immediately.
+- Patients may request a copy of their records through the front desk.`,
+  },
+  {
+    title: "Staff Dress Code",
+    text: `STAFF DRESS CODE
+
+To maintain a professional and clean environment for patients:
+
+- Scrubs or provided uniforms should be worn during all shifts.
+- Closed-toe shoes are required at all times.
+- Name badges should be visible during patient interactions.
+- Personal hygiene and grooming should meet professional standards.
+- Exceptions for religious or medical accommodations should be discussed with the office manager.`,
+  },
+  {
+    title: "Late Arrival Policy",
+    text: `LATE ARRIVAL POLICY
+
+- Patients arriving more than 15 minutes late may need to be rescheduled to ensure other patients are seen on time.
+- Front desk staff will use judgment based on the day's schedule before rebooking a late arrival.
+- Repeated late arrivals may be discussed with the patient at their next visit.`,
+  },
+];
 
 function PolicyApp() {
   const { getToken } = useAuth();
@@ -27,6 +74,10 @@ function PolicyApp() {
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "error"
   const [libraryError, setLibraryError] = useState("");
+  const [versions, setVersions] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [exportingWord, setExportingWord] = useState(false);
+  const pendingVersionRef = useRef(null);
   const chatEndRef = useRef(null);
   const editFlashTimer = useRef(null);
   const abortRef = useRef(null);
@@ -83,6 +134,7 @@ function PolicyApp() {
       setPolicyId(record.id);
       setPolicyTitle(record.title);
       setPolicyDoc(record.document);
+      setVersions(record.versions || []);
       setMessages(record.messages && record.messages.length ? record.messages : [
         { role: "assistant", text: `Reopened "${record.title}". Tell me what you'd like to change next.` },
       ]);
@@ -120,6 +172,7 @@ function PolicyApp() {
     ];
     setPolicyTitle(title);
     setPolicyDoc(doc);
+    setVersions([]);
     setMessages(initialMessages);
     setPhase("chat");
 
@@ -143,14 +196,18 @@ function PolicyApp() {
     saveDebounce.current = setTimeout(async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
+      const versionSnapshot = pendingVersionRef.current;
+      pendingVersionRef.current = null;
       try {
         const res = await authFetch(`/api/policy?id=${encodeURIComponent(id)}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({ document: doc, messages: msgs, title }),
+          body: JSON.stringify({ document: doc, messages: msgs, title, versionSnapshot }),
         });
         if (!res.ok) throw new Error("save failed");
+        const updated = await res.json();
+        if (updated.versions) setVersions(updated.versions);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus(""), 1500);
       } catch (e) {
@@ -194,6 +251,7 @@ function PolicyApp() {
       if (myToken !== cancelTokenRef.current) return;
 
       if (!data.document) throw new Error("empty document");
+      pendingVersionRef.current = { document: policyDoc, label: ask };
       setPolicyDoc(data.document);
       setMessages((m) => [...m, { role: "assistant", text: data.reply || "Updated." }]);
     } catch (e) {
@@ -207,6 +265,39 @@ function PolicyApp() {
     } finally {
       if (myToken === cancelTokenRef.current) setBusy(false);
       abortRef.current = null;
+    }
+  }
+
+  function restoreVersion(version) {
+    pendingVersionRef.current = { document: policyDoc, label: `Before restoring "${version.label}"` };
+    setPolicyDoc(version.document);
+    setMessages((m) => [...m, { role: "assistant", text: `Restored an earlier version from ${new Date(version.savedAt).toLocaleString()}.` }]);
+    setHistoryOpen(false);
+  }
+
+  async function downloadWord() {
+    setExportingWord(true);
+    try {
+      const doc = new Document({
+        sections: [
+          {
+            children: policyDoc
+              .split("\n")
+              .map((line) => new Paragraph({ text: line })),
+          },
+        ],
+      });
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(policyTitle || "policy").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError("Couldn't create the Word file. Try downloading as text instead.");
+    } finally {
+      setExportingWord(false);
     }
   }
 
@@ -376,6 +467,41 @@ function PolicyApp() {
             <p style={{ fontSize: 14, fontWeight: 300, color: MUTED, margin: "0 0 20px", lineHeight: 1.6 }}>
               Drop in the current version — even if it's rough or outdated. Then just tell it what to change, like you'd tell a colleague.
             </p>
+
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 500, color: MUTED, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Or start from a template
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {TEMPLATES.map((t) => (
+                  <button
+                    key={t.title}
+                    className="pc-btn"
+                    onClick={() => {
+                      setPasteTitle(t.title);
+                      setPasteText(t.text);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "8px 14px",
+                      border: `1px solid ${RULE}`,
+                      borderRadius: 999,
+                      background: SURFACE,
+                      fontSize: 12.5,
+                      fontWeight: 500,
+                      color: INK,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Sparkles size={12} color={ACCENT} />
+                    {t.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <input
               className="pc-paste"
               value={pasteTitle}
@@ -474,11 +600,25 @@ function PolicyApp() {
                   )}
                 </span>
                 <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    className="pc-btn"
+                    onClick={() => setHistoryOpen(true)}
+                    title="Version history"
+                    style={{ ...iconBtn, width: "auto", padding: "0 10px", position: "relative" }}
+                  >
+                    <History size={14} color={MUTED} />
+                    {versions.length > 0 && (
+                      <span style={{ fontSize: 10.5, color: MUTED, marginLeft: 5 }}>{versions.length}</span>
+                    )}
+                  </button>
                   <button className="pc-btn" onClick={printDoc} title="Print" style={iconBtn}>
                     <Printer size={14} color={MUTED} />
                   </button>
-                  <button className="pc-btn" onClick={download} title="Download" style={iconBtn}>
+                  <button className="pc-btn" onClick={download} title="Download as text" style={iconBtn}>
                     <Download size={14} color={MUTED} />
+                  </button>
+                  <button className="pc-btn" onClick={downloadWord} title="Download as Word" style={iconBtn} disabled={exportingWord}>
+                    {exportingWord ? <Loader2 size={14} color={MUTED} style={{ animation: "spin 1s linear infinite" }} /> : <FileDown size={14} color={MUTED} />}
                   </button>
                 </div>
               </div>
@@ -510,6 +650,65 @@ function PolicyApp() {
             <p style={{ fontSize: 12, color: MUTED, marginTop: 12 }}>
               Click directly into the document to fix small things. Use chat on the left for bigger rewrites. Everything saves automatically.
             </p>
+          </div>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div
+          onClick={() => setHistoryOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(21,23,30,0.4)",
+            display: "flex",
+            justifyContent: "flex-end",
+            zIndex: 50,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 360,
+              maxWidth: "90vw",
+              height: "100%",
+              background: SURFACE,
+              boxShadow: "-4px 0 24px rgba(21,23,30,0.12)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div style={{ padding: "18px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 15, fontWeight: 500 }}>Version history</span>
+              <button className="pc-btn" onClick={() => setHistoryOpen(false)} style={iconBtn}>
+                <X size={14} color={MUTED} />
+              </button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+              {versions.length === 0 ? (
+                <p style={{ fontSize: 13, color: MUTED, padding: "8px 4px" }}>
+                  No earlier versions yet — one will be saved here each time you make a change through chat.
+                </p>
+              ) : (
+                [...versions].reverse().map((v) => (
+                  <div key={v.id} style={{ border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 16px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 6 }}>
+                      {new Date(v.savedAt).toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: 13, color: INK, marginBottom: 10, lineHeight: 1.4 }}>
+                      "{v.label}"
+                    </div>
+                    <button
+                      className="pc-btn"
+                      onClick={() => restoreVersion(v)}
+                      style={{ fontSize: 12, fontWeight: 500, color: ACCENT, background: ACCENT_SOFT, border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer" }}
+                    >
+                      Restore this version
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

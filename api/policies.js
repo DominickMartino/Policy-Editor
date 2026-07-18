@@ -48,6 +48,7 @@ export default async function handler(req, res) {
         title: title?.trim() || "Untitled policy",
         document,
         messages: messages || [],
+        versions: [],
         updatedAt: Date.now(),
       };
 

@@ -38,12 +38,27 @@ export default async function handler(req, res) {
       if (!raw) return res.status(404).json({ error: "Not found" });
       const existing = JSON.parse(raw);
 
-      const { document, messages, title } = req.body || {};
+      const { document, messages, title, versionSnapshot } = req.body || {};
+
+      let versions = existing.versions || [];
+      if (versionSnapshot && versionSnapshot.document) {
+        versions = [
+          ...versions,
+          {
+            id: `v_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            document: versionSnapshot.document,
+            label: versionSnapshot.label || "Edit",
+            savedAt: Date.now(),
+          },
+        ].slice(-20); // keep the most recent 20 versions
+      }
+
       const updated = {
         ...existing,
         document: document ?? existing.document,
         messages: messages ?? existing.messages,
         title: title ?? existing.title,
+        versions,
         updatedAt: Date.now(),
       };
       await kv.set(recordKey, JSON.stringify(updated));
