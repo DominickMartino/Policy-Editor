@@ -116,6 +116,7 @@ function PolicyApp() {
   const editFlashTimer = useRef(null);
   const abortRef = useRef(null);
   const cancelTokenRef = useRef(0);
+  const preRewriteDocRef = useRef(null);
   const saveDebounce = useRef(null);
 
   const filteredPolicies = librarySearch.trim()
@@ -259,7 +260,7 @@ function PolicyApp() {
   }, []);
 
   useEffect(() => {
-    if (policyId && phase === "chat") {
+    if (policyId && phase === "chat" && !busy) {
       saveNow(policyDoc, messages, policyTitle, policyId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -275,6 +276,9 @@ function PolicyApp() {
     const controller = new AbortController();
     abortRef.current = controller;
     const myToken = ++cancelTokenRef.current;
+    const originalDoc = policyDoc;
+    preRewriteDocRef.current = originalDoc;
+
     try {
       const response = await authFetch("/api/rewrite", {
         method: "POST",
@@ -284,24 +288,62 @@ function PolicyApp() {
       });
 
       if (myToken !== cancelTokenRef.current) return;
+      if (!response.ok || !response.body) throw new Error("request failed");
 
-      if (!response.ok) throw new Error("request failed");
-      const data = await response.json();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let raw = "";
+      let docStartIdx = -1;
 
-      if (myToken !== cancelTokenRef.current) return;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (myToken !== cancelTokenRef.current) {
+          try {
+            reader.cancel();
+          } catch (e) {
+            // ignore
+          }
+          return;
+        }
+        if (done) break;
+        raw += decoder.decode(value, { stream: true });
 
-      if (!data.document) throw new Error("empty document");
-      pendingVersionRef.current = { document: policyDoc, label: ask };
-      setPolicyDoc(data.document);
-      setMessages((m) => [...m, { role: "assistant", text: data.reply || "Updated.", flags: data.flags || [] }]);
-    } catch (e) {
-      if (myToken !== cancelTokenRef.current) return;
-      if (e.name === "AbortError") {
-        setMessages((m) => [...m, { role: "assistant", text: "Cancelled — the document wasn't changed." }]);
-      } else {
-        setError("That change didn't go through. Try rephrasing it.");
-        setMessages((m) => [...m, { role: "assistant", text: "Hmm, I hit a snag applying that one. Mind rephrasing the change you want?" }]);
+        if (docStartIdx === -1) {
+          const idx = raw.indexOf("===DOCUMENT===");
+          if (idx !== -1) docStartIdx = idx;
+        }
+        if (docStartIdx !== -1) {
+          // Show the document rewriting itself live, chunk by chunk, as it streams in.
+          const liveDoc = raw.slice(docStartIdx + "===DOCUMENT===".length).replace(/^\n/, "");
+          setPolicyDoc(liveDoc);
+        }
       }
+
+      if (myToken !== cancelTokenRef.current) return;
+
+      // Now do a clean final parse of the complete response.
+      const flagsIdx = raw.indexOf("===FLAGS===");
+      const docIdx = raw.indexOf("===DOCUMENT===");
+      if (docIdx === -1) throw new Error("bad shape");
+
+      const reply = raw.slice(0, flagsIdx === -1 ? docIdx : flagsIdx).replace(/^REPLY:\s*/i, "").trim();
+      const flagsRaw = flagsIdx === -1 ? "" : raw.slice(flagsIdx + "===FLAGS===".length, docIdx).trim();
+      const document = raw.slice(docIdx + "===DOCUMENT===".length).trim();
+      const flags =
+        !flagsRaw || /^none$/i.test(flagsRaw)
+          ? []
+          : flagsRaw.split("\n").map((l) => l.replace(/^-\s*/, "").trim()).filter(Boolean);
+
+      if (!document) throw new Error("empty document");
+
+      pendingVersionRef.current = { document: originalDoc, label: ask };
+      setPolicyDoc(document);
+      setMessages((m) => [...m, { role: "assistant", text: reply || "Updated.", flags }]);
+    } catch (e) {
+      if (myToken !== cancelTokenRef.current) return; // cancelRewrite already handled cleanup
+      setPolicyDoc(originalDoc);
+      setError("That change didn't go through. Try rephrasing it.");
+      setMessages((m) => [...m, { role: "assistant", text: "Hmm, I hit a snag applying that one. Mind rephrasing the change you want?" }]);
     } finally {
       if (myToken === cancelTokenRef.current) setBusy(false);
       abortRef.current = null;
@@ -388,6 +430,7 @@ function PolicyApp() {
   function cancelRewrite() {
     cancelTokenRef.current++;
     abortRef.current?.abort();
+    if (preRewriteDocRef.current !== null) setPolicyDoc(preRewriteDocRef.current);
     setBusy(false);
     setMessages((m) => [...m, { role: "assistant", text: "Cancelled — the document wasn't changed." }]);
   }
@@ -726,7 +769,12 @@ function PolicyApp() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${RULE}`, paddingBottom: 14, marginBottom: 22 }}>
                 <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: ACCENT, display: "flex", alignItems: "center", gap: 8 }}>
                   {policyTitle || "Working draft"}
-                  {justEdited && (
+                  {busy && (
+                    <span style={{ color: ACCENT, textTransform: "none", letterSpacing: "normal", fontWeight: 500, fontSize: 11.5, display: "flex", alignItems: "center", gap: 4 }}>
+                      <Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> writing…
+                    </span>
+                  )}
+                  {!busy && justEdited && (
                     <span style={{ color: "#2E9B5F", textTransform: "none", letterSpacing: "normal", fontWeight: 500, fontSize: 11.5 }}>
                       · edit saved
                     </span>

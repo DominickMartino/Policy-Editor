@@ -21,7 +21,7 @@ Rules: Always reproduce the ENTIRE document in the DOCUMENT section, not just th
   const userMsg = `CURRENT POLICY DOCUMENT:\n---\n${policyDoc}\n---\n\nREQUESTED CHANGE: ${ask}`;
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -32,47 +32,59 @@ Rules: Always reproduce the ENTIRE document in the DOCUMENT section, not just th
         model: "claude-sonnet-4-6",
         max_tokens: 8000,
         system,
+        stream: true,
         messages: [{ role: "user", content: userMsg }],
       }),
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
+    if (!upstream.ok || !upstream.body) {
+      const errText = await upstream.text().catch(() => "");
       console.error("Anthropic API error:", errText);
       return res.status(502).json({ error: "Upstream error" });
     }
 
-    const data = await response.json();
-    const raw = (data.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    // Stream plain text chunks straight through to the browser as they arrive,
+    // instead of waiting for the whole response to finish.
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    });
 
-    const flagsIdx = raw.indexOf("===FLAGS===");
-    const docIdx = raw.indexOf("===DOCUMENT===");
-    if (flagsIdx === -1 || docIdx === -1) {
-      return res.status(502).json({ error: "Unexpected response shape" });
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split("\n");
+      buffer = lines.pop(); // keep the last, possibly incomplete line for next time
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr || jsonStr === "[DONE]") continue;
+        try {
+          const evt = JSON.parse(jsonStr);
+          if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+            res.write(evt.delta.text);
+          }
+        } catch (e) {
+          // Ignore any line that isn't valid JSON (shouldn't normally happen)
+        }
+      }
     }
-    const reply = raw.slice(0, flagsIdx).replace(/^REPLY:\s*/i, "").trim();
-    const flagsRaw = raw.slice(flagsIdx + "===FLAGS===".length, docIdx).trim();
-    const document = raw.slice(docIdx + "===DOCUMENT===".length).trim();
 
-    const flags =
-      !flagsRaw || /^none$/i.test(flagsRaw)
-        ? []
-        : flagsRaw
-            .split("\n")
-            .map((l) => l.replace(/^-\s*/, "").trim())
-            .filter(Boolean);
-
-    if (!document) {
-      return res.status(502).json({ error: "Empty document returned" });
-    }
-
-    return res.status(200).json({ reply, document, flags });
+    res.end();
   } catch (e) {
     console.error("Server error:", e);
-    return res.status(500).json({ error: "Server error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Server error" });
+    } else {
+      res.end();
+    }
   }
 }
