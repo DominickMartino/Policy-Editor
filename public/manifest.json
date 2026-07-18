@@ -1,0 +1,13 @@
+{
+  "name": "Martino Medical Policy Editor",
+  "short_name": "Policy Editor",
+  "description": "Rewrite and manage practice policies with AI-assisted editing.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F2F3F6",
+  "theme_color": "#3654E0",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
