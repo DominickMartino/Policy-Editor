@@ -1,15 +1,27 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2, History, FileDown, X, Sparkles } from "lucide-react";
+import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2, History, FileDown, X, Sparkles, Sun, Moon, Search, Share2, Copy, Check, ShieldAlert } from "lucide-react";
 import { SignedIn, SignedOut, SignIn, UserButton, useAuth } from "@clerk/clerk-react";
 import { Document, Packer, Paragraph } from "docx";
 
-const INK = "#15171E";
-const PAPER = "#F2F3F6";
-const SURFACE = "#FFFFFF";
-const ACCENT = "#3654E0";
-const ACCENT_SOFT = "#EEF0FE";
-const MUTED = "#6B7080";
-const RULE = "#E4E5EA";
+const LIGHT = {
+  INK: "#15171E",
+  PAPER: "#F2F3F6",
+  SURFACE: "#FFFFFF",
+  ACCENT: "#3654E0",
+  ACCENT_SOFT: "#EEF0FE",
+  MUTED: "#6B7080",
+  RULE: "#E4E5EA",
+};
+
+const DARK = {
+  INK: "#ECEDF2",
+  PAPER: "#16181E",
+  SURFACE: "#1F222A",
+  ACCENT: "#6C87FF",
+  ACCENT_SOFT: "#252C48",
+  MUTED: "#9195A6",
+  RULE: "#2C303A",
+};
 
 const TEMPLATES = [
   {
@@ -59,6 +71,23 @@ To maintain a professional and clean environment for patients:
 
 function PolicyApp() {
   const { getToken } = useAuth();
+  const [dark, setDark] = useState(() => {
+    try {
+      return localStorage.getItem("policyEditorDark") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const { INK, PAPER, SURFACE, ACCENT, ACCENT_SOFT, MUTED, RULE } = dark ? DARK : LIGHT;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("policyEditorDark", dark ? "1" : "0");
+    } catch {
+      // ignore if storage is unavailable
+    }
+  }, [dark]);
+
   const [phase, setPhase] = useState("library"); // library | paste | chat
   const [policyId, setPolicyId] = useState(null);
   const [policyTitle, setPolicyTitle] = useState("");
@@ -71,18 +100,27 @@ function PolicyApp() {
   const [error, setError] = useState("");
   const [justEdited, setJustEdited] = useState(false);
   const [savedPolicies, setSavedPolicies] = useState([]);
+  const [librarySearch, setLibrarySearch] = useState("");
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState(""); // "" | "saving" | "saved" | "error"
   const [libraryError, setLibraryError] = useState("");
   const [versions, setVersions] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exportingWord, setExportingWord] = useState(false);
+  const [shareToken, setShareToken] = useState(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
   const pendingVersionRef = useRef(null);
   const chatEndRef = useRef(null);
   const editFlashTimer = useRef(null);
   const abortRef = useRef(null);
   const cancelTokenRef = useRef(0);
   const saveDebounce = useRef(null);
+
+  const filteredPolicies = librarySearch.trim()
+    ? savedPolicies.filter((p) => p.title.toLowerCase().includes(librarySearch.trim().toLowerCase()))
+    : savedPolicies;
 
   async function authFetch(url, options = {}) {
     const token = await getToken();
@@ -135,6 +173,7 @@ function PolicyApp() {
       setPolicyTitle(record.title);
       setPolicyDoc(record.document);
       setVersions(record.versions || []);
+      setShareToken(record.shareToken || null);
       setMessages(record.messages && record.messages.length ? record.messages : [
         { role: "assistant", text: `Reopened "${record.title}". Tell me what you'd like to change next.` },
       ]);
@@ -173,6 +212,7 @@ function PolicyApp() {
     setPolicyTitle(title);
     setPolicyDoc(doc);
     setVersions([]);
+    setShareToken(null);
     setMessages(initialMessages);
     setPhase("chat");
 
@@ -253,7 +293,7 @@ function PolicyApp() {
       if (!data.document) throw new Error("empty document");
       pendingVersionRef.current = { document: policyDoc, label: ask };
       setPolicyDoc(data.document);
-      setMessages((m) => [...m, { role: "assistant", text: data.reply || "Updated." }]);
+      setMessages((m) => [...m, { role: "assistant", text: data.reply || "Updated.", flags: data.flags || [] }]);
     } catch (e) {
       if (myToken !== cancelTokenRef.current) return;
       if (e.name === "AbortError") {
@@ -299,6 +339,50 @@ function PolicyApp() {
     } finally {
       setExportingWord(false);
     }
+  }
+
+  async function generateShareLink() {
+    if (!policyId) return;
+    setShareBusy(true);
+    try {
+      const res = await authFetch(`/api/policy?id=${encodeURIComponent(policyId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generateShare: true }),
+      });
+      const updated = await res.json();
+      setShareToken(updated.shareToken || null);
+    } catch (e) {
+      setError("Couldn't create a share link. Try again.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function revokeShareLink() {
+    if (!policyId) return;
+    setShareBusy(true);
+    try {
+      const res = await authFetch(`/api/policy?id=${encodeURIComponent(policyId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revokeShare: true }),
+      });
+      const updated = await res.json();
+      setShareToken(updated.shareToken || null);
+    } catch (e) {
+      setError("Couldn't revoke the share link. Try again.");
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  function copyShareLink() {
+    const url = `${window.location.origin}/shared/${shareToken}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    });
   }
 
   function cancelRewrite() {
@@ -364,6 +448,14 @@ function PolicyApp() {
             <FileText size={14} color="#fff" strokeWidth={2} />
           </div>
           <span style={{ fontSize: 16, fontWeight: 300, letterSpacing: "0.01em" }}>Policy Editor</span>
+          <button
+            className="pc-btn"
+            onClick={() => setDark((d) => !d)}
+            title={dark ? "Switch to light mode" : "Switch to dark mode"}
+            style={{ ...iconBtn(RULE), marginLeft: 2 }}
+          >
+            {dark ? <Sun size={14} color={MUTED} /> : <Moon size={14} color={MUTED} />}
+          </button>
           <UserButton afterSignOutUrl="/" />
           {phase === "chat" && saveStatus && (
             <span style={{ fontSize: 11.5, color: saveStatus === "saved" ? "#2E9B5F" : saveStatus === "error" ? "#C0392B" : MUTED, marginLeft: 4 }}>
@@ -402,6 +494,19 @@ function PolicyApp() {
               </button>
             </div>
 
+            {!libraryLoading && !libraryError && savedPolicies.length > 0 && (
+              <div style={{ position: "relative", marginBottom: 16 }}>
+                <Search size={14} color={MUTED} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
+                <input
+                  className="pc-paste"
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  placeholder="Search your policies…"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "10px 14px 10px 38px", border: `1.5px solid ${RULE}`, borderRadius: 10, background: SURFACE, fontSize: 13, color: INK }}
+                />
+              </div>
+            )}
+
             {libraryLoading ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8, color: MUTED, fontSize: 13.5, padding: "20px 0" }}>
                 <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Loading your policies…
@@ -424,9 +529,13 @@ function PolicyApp() {
                   Nothing saved yet. Start your first policy to see it here.
                 </p>
               </div>
+            ) : filteredPolicies.length === 0 ? (
+              <p style={{ fontSize: 13.5, color: MUTED, padding: "12px 4px" }}>
+                No policies match "{librarySearch}".
+              </p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {savedPolicies.map((p) => (
+                {filteredPolicies.map((p) => (
                   <div
                     key={p.id}
                     className="pc-card"
@@ -534,7 +643,7 @@ function PolicyApp() {
           <div style={{ display: "flex", flexDirection: "column", borderRight: `1px solid ${RULE}`, minHeight: 0, background: SURFACE }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 8px" }}>
               {messages.map((m, i) => (
-                <div key={i} className="pc-msg" style={{ marginBottom: 14, display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                <div key={i} className="pc-msg" style={{ marginBottom: 14, display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
                   <div
                     style={{
                       maxWidth: "85%",
@@ -548,6 +657,30 @@ function PolicyApp() {
                   >
                     {m.text}
                   </div>
+                  {m.flags && m.flags.length > 0 && (
+                    <div
+                      style={{
+                        maxWidth: "85%",
+                        marginTop: 6,
+                        padding: "10px 13px",
+                        borderRadius: "14px 14px 14px 3px",
+                        background: dark ? "#3A2E14" : "#FFF6E5",
+                        border: `1px solid ${dark ? "#5C4A20" : "#F0DBA6"}`,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <ShieldAlert size={12.5} color={dark ? "#E0B84A" : "#9A7A1E"} />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: dark ? "#E0B84A" : "#9A7A1E", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          Worth double-checking
+                        </span>
+                      </div>
+                      {m.flags.map((f, fi) => (
+                        <div key={fi} style={{ fontSize: 12.5, color: dark ? "#E8D9AE" : "#7A5F17", lineHeight: 1.5, marginBottom: fi === m.flags.length - 1 ? 0 : 4 }}>
+                          • {f}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
               {busy && (
@@ -604,21 +737,24 @@ function PolicyApp() {
                     className="pc-btn"
                     onClick={() => setHistoryOpen(true)}
                     title="Version history"
-                    style={{ ...iconBtn, width: "auto", padding: "0 10px", position: "relative" }}
+                    style={{ ...iconBtn(RULE), width: "auto", padding: "0 10px", position: "relative" }}
                   >
                     <History size={14} color={MUTED} />
                     {versions.length > 0 && (
                       <span style={{ fontSize: 10.5, color: MUTED, marginLeft: 5 }}>{versions.length}</span>
                     )}
                   </button>
-                  <button className="pc-btn" onClick={printDoc} title="Print" style={iconBtn}>
+                  <button className="pc-btn" onClick={printDoc} title="Print" style={iconBtn(RULE)}>
                     <Printer size={14} color={MUTED} />
                   </button>
-                  <button className="pc-btn" onClick={download} title="Download as text" style={iconBtn}>
+                  <button className="pc-btn" onClick={download} title="Download as text" style={iconBtn(RULE)}>
                     <Download size={14} color={MUTED} />
                   </button>
-                  <button className="pc-btn" onClick={downloadWord} title="Download as Word" style={iconBtn} disabled={exportingWord}>
+                  <button className="pc-btn" onClick={downloadWord} title="Download as Word" style={iconBtn(RULE)} disabled={exportingWord}>
                     {exportingWord ? <Loader2 size={14} color={MUTED} style={{ animation: "spin 1s linear infinite" }} /> : <FileDown size={14} color={MUTED} />}
+                  </button>
+                  <button className="pc-btn" onClick={() => setShareOpen(true)} title="Share read-only link" style={iconBtn(RULE)}>
+                    <Share2 size={14} color={MUTED} />
                   </button>
                 </div>
               </div>
@@ -654,6 +790,65 @@ function PolicyApp() {
         </div>
       )}
 
+      {shareOpen && (
+        <div
+          onClick={() => setShareOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(21,23,30,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: 420, maxWidth: "100%", background: SURFACE, borderRadius: 16, padding: 24 }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <span style={{ fontSize: 15, fontWeight: 500 }}>Share read-only link</span>
+              <button className="pc-btn" onClick={() => setShareOpen(false)} style={iconBtn(RULE)}>
+                <X size={14} color={MUTED} />
+              </button>
+            </div>
+            <p style={{ fontSize: 13, color: MUTED, lineHeight: 1.5, marginBottom: 16 }}>
+              Anyone with this link can view "{policyTitle}" — they can't edit it or sign in to your account.
+            </p>
+            {!shareToken ? (
+              <button
+                className="pc-btn"
+                onClick={generateShareLink}
+                disabled={shareBusy}
+                style={{ padding: "11px 18px", background: ACCENT, color: "#fff", border: "none", borderRadius: 10, fontSize: 13.5, fontWeight: 600, cursor: shareBusy ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8 }}
+              >
+                {shareBusy ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Share2 size={14} />}
+                Create link
+              </button>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <input
+                    readOnly
+                    value={`${window.location.origin}/shared/${shareToken}`}
+                    style={{ flex: 1, padding: "10px 12px", border: `1.5px solid ${RULE}`, borderRadius: 8, background: PAPER, fontSize: 12.5, color: INK }}
+                  />
+                  <button
+                    className="pc-btn"
+                    onClick={copyShareLink}
+                    style={{ padding: "0 14px", background: shareCopied ? "#2E9B5F" : ACCENT, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 500 }}
+                  >
+                    {shareCopied ? <Check size={13} /> : <Copy size={13} />}
+                    {shareCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <button
+                  className="pc-btn"
+                  onClick={revokeShareLink}
+                  disabled={shareBusy}
+                  style={{ fontSize: 12.5, color: "#C0392B", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                >
+                  Revoke this link
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {historyOpen && (
         <div
           onClick={() => setHistoryOpen(false)}
@@ -680,7 +875,7 @@ function PolicyApp() {
           >
             <div style={{ padding: "18px 20px", borderBottom: `1px solid ${RULE}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: 15, fontWeight: 500 }}>Version history</span>
-              <button className="pc-btn" onClick={() => setHistoryOpen(false)} style={iconBtn}>
+              <button className="pc-btn" onClick={() => setHistoryOpen(false)} style={iconBtn(RULE)}>
                 <X size={14} color={MUTED} />
               </button>
             </div>
@@ -717,6 +912,17 @@ function PolicyApp() {
 }
 
 export default function App() {
+  const [sharedToken, setSharedToken] = useState(null);
+
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/shared\/(.+)$/);
+    if (match) setSharedToken(match[1]);
+  }, []);
+
+  if (sharedToken) {
+    return <SharedPolicyView token={sharedToken} />;
+  }
+
   return (
     <>
       <SignedOut>
@@ -726,17 +932,17 @@ export default function App() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: PAPER,
+            background: LIGHT.PAPER,
             fontFamily: "'Lexend', 'Inter', -apple-system, sans-serif",
           }}
         >
           <style>{`@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@200;300;400;500;600&display=swap');`}</style>
           <div style={{ textAlign: "center" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 28 }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: ACCENT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: LIGHT.ACCENT, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <FileText size={16} color="#fff" strokeWidth={2} />
               </div>
-              <span style={{ fontSize: 19, fontWeight: 300, color: INK }}>Policy Editor</span>
+              <span style={{ fontSize: 19, fontWeight: 300, color: LIGHT.INK }}>Policy Editor</span>
             </div>
             <SignIn routing="hash" />
           </div>
@@ -749,14 +955,78 @@ export default function App() {
   );
 }
 
-const iconBtn = {
-  width: 28,
-  height: 28,
-  borderRadius: 8,
-  border: `1px solid ${RULE}`,
-  background: "transparent",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  cursor: "pointer",
-};
+function SharedPolicyView({ token }) {
+  const [status, setStatus] = useState("loading"); // loading | ready | error
+  const [policy, setPolicy] = useState(null);
+  const [errMsg, setErrMsg] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/shared?token=${encodeURIComponent(token)}`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || "This link isn't valid.");
+        }
+        return res.json();
+      })
+      .then((data) => {
+        setPolicy(data);
+        setStatus("ready");
+      })
+      .catch((e) => {
+        setErrMsg(e.message);
+        setStatus("error");
+      });
+  }, [token]);
+
+  return (
+    <div style={{ minHeight: "100vh", background: LIGHT.PAPER, fontFamily: "'Lexend', 'Inter', -apple-system, sans-serif", padding: "40px 20px" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@200;300;400;500;600&display=swap');`}</style>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: LIGHT.ACCENT, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <FileText size={13} color="#fff" strokeWidth={2} />
+          </div>
+          <span style={{ fontSize: 13, color: LIGHT.MUTED }}>Shared via Policy Editor</span>
+        </div>
+
+        {status === "loading" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: LIGHT.MUTED, fontSize: 13.5 }}>
+            <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Loading…
+          </div>
+        )}
+
+        {status === "error" && (
+          <div style={{ border: "1.5px solid #F1B0A8", background: "#FDF1EF", borderRadius: 14, padding: "20px 22px" }}>
+            <p style={{ fontSize: 13.5, color: "#A13B2E", margin: 0 }}>{errMsg}</p>
+          </div>
+        )}
+
+        {status === "ready" && (
+          <div style={{ background: LIGHT.SURFACE, border: `1px solid ${LIGHT.RULE}`, borderRadius: 16, padding: "32px 36px", boxShadow: "0 1px 2px rgba(21,23,30,0.04), 0 10px 30px rgba(21,23,30,0.06)" }}>
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: LIGHT.ACCENT, marginBottom: 20, paddingBottom: 14, borderBottom: `1px solid ${LIGHT.RULE}` }}>
+              {policy.title}
+            </div>
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.8, color: LIGHT.INK, margin: 0, fontFamily: "'Lexend', 'Inter', -apple-system, sans-serif" }}>
+              {policy.document}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function iconBtn(ruleColor) {
+  return {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    border: `1px solid ${ruleColor}`,
+    background: "transparent",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  };
+}

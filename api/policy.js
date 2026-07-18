@@ -38,7 +38,17 @@ export default async function handler(req, res) {
       if (!raw) return res.status(404).json({ error: "Not found" });
       const existing = JSON.parse(raw);
 
-      const { document, messages, title, versionSnapshot } = req.body || {};
+      const { document, messages, title, versionSnapshot, generateShare, revokeShare } = req.body || {};
+
+      let shareToken = existing.shareToken || null;
+      if (generateShare && !shareToken) {
+        shareToken = `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+        await kv.set(`share:${shareToken}`, JSON.stringify({ userId, id }));
+      }
+      if (revokeShare && shareToken) {
+        await kv.del(`share:${shareToken}`);
+        shareToken = null;
+      }
 
       let versions = existing.versions || [];
       if (versionSnapshot && versionSnapshot.document) {
@@ -59,6 +69,7 @@ export default async function handler(req, res) {
         messages: messages ?? existing.messages,
         title: title ?? existing.title,
         versions,
+        shareToken,
         updatedAt: Date.now(),
       };
       await kv.set(recordKey, JSON.stringify(updated));
@@ -66,6 +77,11 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "DELETE") {
+      const raw = await kv.get(recordKey);
+      if (raw) {
+        const existing = JSON.parse(raw);
+        if (existing.shareToken) await kv.del(`share:${existing.shareToken}`);
+      }
       await kv.del(recordKey);
       const idsRaw = await kv.get(indexKey);
       const ids = idsRaw ? JSON.parse(idsRaw) : [];
