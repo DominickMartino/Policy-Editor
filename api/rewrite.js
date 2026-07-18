@@ -16,7 +16,7 @@ REPLY: <one or two sentences confirming what you changed, plain friendly languag
 ===DOCUMENT===
 <the FULL updated policy document text, complete, not truncated or summarized>
 
-Rules: Always reproduce the ENTIRE document in the DOCUMENT section, not just the changed part. Keep the document's original structure and any details the user didn't ask to change. Make only the requested changes plus anything grammatically necessary. Plain professional language. Never add patient-identifiable information. Only include a flag if it's genuinely relevant to what's in the document \u2014 don't invent generic filler flags.`;
+Rules: Always reproduce the ENTIRE document in the DOCUMENT section, not just the changed part. Keep the document's original structure and any details the user didn't ask to change. Make only the requested changes plus anything grammatically necessary. Plain professional language. Never add patient-identifiable information. Only include a flag if it's genuinely relevant to what's in the document \u2014 don't invent generic filler flags. The document may contain simple formatting markers: **text** means bold, *text* means italic. Preserve these markers exactly as they appear unless the user's request would naturally change them. If the user asks to bold, italicize, or emphasize something, add the appropriate ** or * markers around that text.`;
 
   const userMsg = `CURRENT POLICY DOCUMENT:\n---\n${policyDoc}\n---\n\nREQUESTED CHANGE: ${ask}`;
 

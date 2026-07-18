@@ -74,6 +74,38 @@ between visits:
   Erin signs in with her own email and sees only her own policies
 - You can add a custom domain later under Project Settings → Domains
 
+### 7. Set up billing (Stripe)
+This adds real, working subscription payments.
+
+- Go to https://stripe.com and sign up
+- **Start in Test Mode** (there's a toggle in the Stripe dashboard) so you can
+  try the whole flow with fake cards before charging anyone real money
+- Go to **Product Catalog → Add a product**. Name it (e.g. "Policy Editor"),
+  set a recurring monthly price (e.g. $79/month), and save
+- Click into the price you just created and copy its **Price ID**
+  (starts with `price_...`)
+- Go to **Developers → API keys** and copy your **Secret key**
+  (starts with `sk_test_...` in test mode)
+- Go to **Developers → Webhooks → Add endpoint**:
+  - Endpoint URL: `https://your-app-url.vercel.app/api/stripe-webhook`
+  - Events to send: `checkout.session.completed`, `customer.subscription.updated`,
+    `customer.subscription.deleted`
+  - After creating it, copy the **Signing secret** (starts with `whsec_...`)
+- In Vercel, add three more environment variables:
+  - `STRIPE_SECRET_KEY` — the Secret key
+  - `STRIPE_PRICE_ID` — the Price ID
+  - `STRIPE_WEBHOOK_SECRET` — the Signing secret
+- Redeploy
+
+**Testing it:** in Stripe's test mode, use card number `4242 4242 4242 4242`,
+any future expiry date, and any 3-digit CVC to simulate a real payment
+without charging anyone.
+
+**Going live:** once you've tested the whole flow, flip Stripe's toggle from
+Test Mode to Live Mode, repeat the product/webhook/key steps in live mode
+(they're separate from test mode), and update the three environment
+variables in Vercel with the live versions.
+
 ## Testing locally first (optional, for the technically curious)
 
 If you want to try it on your own computer before deploying:

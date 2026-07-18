@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2, History, FileDown, X, Sparkles, Sun, Moon, Search, Share2, Copy, Check, ShieldAlert } from "lucide-react";
+import { FileText, Send, Download, Printer, Loader2, RotateCcw, Plus, Clock, Trash2, History, FileDown, X, Sparkles, Sun, Moon, Search, Share2, Copy, Check, ShieldAlert, Bold, Italic } from "lucide-react";
 import { SignedIn, SignedOut, SignIn, UserButton, useAuth } from "@clerk/clerk-react";
-import { Document, Packer, Paragraph } from "docx";
+import { Document, Packer, Paragraph, TextRun } from "docx";
 
 const LIGHT = {
   INK: "#15171E",
@@ -69,7 +69,7 @@ To maintain a professional and clean environment for patients:
   },
 ];
 
-function PolicyApp() {
+function PolicyApp({ onOpenBilling, billingLoading }) {
   const { getToken } = useAuth();
   const [dark, setDark] = useState(() => {
     try {
@@ -111,10 +111,12 @@ function PolicyApp() {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [printTheme, setPrintTheme] = useState("classic");
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
   const [mobileTab, setMobileTab] = useState("document"); // "chat" | "document" — only used on narrow screens
   const pendingVersionRef = useRef(null);
   const chatEndRef = useRef(null);
+  const docTextareaRef = useRef(null);
   const editFlashTimer = useRef(null);
   const abortRef = useRef(null);
   const cancelTokenRef = useRef(0);
@@ -185,6 +187,7 @@ function PolicyApp() {
       setPolicyDoc(record.document);
       setVersions(record.versions || []);
       setShareToken(record.shareToken || null);
+      setPrintTheme(record.printTheme || "classic");
       setMessages(record.messages && record.messages.length ? record.messages : [
         { role: "assistant", text: `Reopened "${record.title}". Tell me what you'd like to change next.` },
       ]);
@@ -224,6 +227,7 @@ function PolicyApp() {
     setPolicyDoc(doc);
     setVersions([]);
     setShareToken(null);
+    setPrintTheme("classic");
     setMessages(initialMessages);
     setPhase("chat");
 
@@ -240,7 +244,7 @@ function PolicyApp() {
     }
   }
 
-  const saveNow = useCallback((doc, msgs, title, id) => {
+  const saveNow = useCallback((doc, msgs, title, id, theme) => {
     if (!id) return;
     setSaveStatus("saving");
     clearTimeout(saveDebounce.current);
@@ -254,7 +258,7 @@ function PolicyApp() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({ document: doc, messages: msgs, title, versionSnapshot }),
+          body: JSON.stringify({ document: doc, messages: msgs, title, versionSnapshot, printTheme: theme }),
         });
         if (!res.ok) throw new Error("save failed");
         const updated = await res.json();
@@ -271,10 +275,10 @@ function PolicyApp() {
 
   useEffect(() => {
     if (policyId && phase === "chat" && !busy) {
-      saveNow(policyDoc, messages, policyTitle, policyId);
+      saveNow(policyDoc, messages, policyTitle, policyId, printTheme);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [policyDoc, messages]);
+  }, [policyDoc, messages, printTheme]);
 
   async function send() {
     const ask = input.trim();
@@ -371,12 +375,18 @@ function PolicyApp() {
   async function downloadWord() {
     setExportingWord(true);
     try {
+      const theme = PRINT_THEMES.find((t) => t.id === printTheme) || PRINT_THEMES[0];
       const doc = new Document({
         sections: [
           {
-            children: policyDoc
-              .split("\n")
-              .map((line) => new Paragraph({ text: line })),
+            children: policyDoc.split("\n").map(
+              (line) =>
+                new Paragraph({
+                  children: markdownLiteToRuns(line).map(
+                    (r) => new TextRun({ text: r.text, bold: !!r.bold, italics: !!r.italics, font: theme.fontFamily.split(",")[0].replace(/['"]/g, ""), size: theme.fontSize * 2 })
+                  ),
+                })
+            ),
           },
         ],
       });
@@ -446,6 +456,35 @@ function PolicyApp() {
     setMessages((m) => [...m, { role: "assistant", text: "Cancelled — the document wasn't changed." }]);
   }
 
+  function wrapSelection(marker) {
+    const el = docTextareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start === end) return; // nothing selected, do nothing
+
+    const before = policyDoc.slice(0, start);
+    const selected = policyDoc.slice(start, end);
+    const after = policyDoc.slice(end);
+
+    // If the selection is already wrapped in this marker, unwrap it instead of double-wrapping.
+    const alreadyWrapped = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
+    const newSelected = alreadyWrapped ? selected.slice(marker.length, selected.length - marker.length) : `${marker}${selected}${marker}`;
+
+    const updated = before + newSelected + after;
+    setPolicyDoc(updated);
+    setJustEdited(true);
+    clearTimeout(editFlashTimer.current);
+    editFlashTimer.current = setTimeout(() => setJustEdited(false), 1500);
+
+    // Restore focus and selection so the user can keep formatting more text.
+    requestAnimationFrame(() => {
+      el.focus();
+      const newEnd = before.length + newSelected.length;
+      el.setSelectionRange(before.length, newEnd);
+    });
+  }
+
   function download() {
     const blob = new Blob([policyDoc], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
@@ -457,10 +496,15 @@ function PolicyApp() {
   }
 
   function printDoc() {
+    const theme = PRINT_THEMES.find((t) => t.id === printTheme) || PRINT_THEMES[0];
+    const formattedHtml = markdownLiteToHtml(policyDoc);
     const w = window.open("", "_blank");
-    w.document.write(
-      `<pre style="font-family: 'Inter', -apple-system, sans-serif; font-size:14px; line-height:1.7; white-space:pre-wrap; padding:48px; max-width:680px; margin:auto;">${policyDoc.replace(/</g, "&lt;")}</pre>`
-    );
+    w.document.write(`
+      <div style="font-family: ${theme.fontFamily}; font-size: ${theme.fontSize}pt; line-height: ${theme.compact ? 1.4 : 1.7}; white-space: pre-wrap; padding: 48px; max-width: 680px; margin: auto;">
+        <div style="text-align: ${theme.headerAlign}; font-weight: bold; font-size: ${theme.fontSize + 3}pt; margin-bottom: 20px;">${escapeHtml(policyTitle || "")}</div>
+        ${formattedHtml}
+      </div>
+    `);
     w.document.close();
     w.print();
   }
@@ -511,6 +555,17 @@ function PolicyApp() {
             {dark ? <Sun size={14} color={MUTED} /> : <Moon size={14} color={MUTED} />}
           </button>
           <UserButton afterSignOutUrl="/" />
+          {!isMobile && (
+            <button
+              className="pc-btn"
+              onClick={onOpenBilling}
+              disabled={billingLoading}
+              title="Manage billing"
+              style={{ background: "none", border: "none", fontSize: 11.5, color: MUTED, cursor: billingLoading ? "not-allowed" : "pointer", padding: 0, marginLeft: 4, textDecoration: "underline", textUnderlineOffset: 2 }}
+            >
+              {billingLoading ? "Opening…" : "Billing"}
+            </button>
+          )}
           {phase === "chat" && saveStatus && !isMobile && (
             <span style={{ fontSize: 11.5, color: saveStatus === "saved" ? "#2E9B5F" : saveStatus === "error" ? "#C0392B" : MUTED, marginLeft: 4, whiteSpace: "nowrap" }}>
               {saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Couldn't save — check storage setup" : "Saved"}
@@ -860,7 +915,42 @@ function PolicyApp() {
                   </button>
                 </div>
               </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    className="pc-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => wrapSelection("**")}
+                    title="Bold selected text"
+                    style={{ ...iconBtn(RULE), width: 30 }}
+                  >
+                    <Bold size={13} color={MUTED} />
+                  </button>
+                  <button
+                    className="pc-btn"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => wrapSelection("*")}
+                    title="Italicize selected text"
+                    style={{ ...iconBtn(RULE), width: 30 }}
+                  >
+                    <Italic size={13} color={MUTED} />
+                  </button>
+                </div>
+                <select
+                  value={printTheme}
+                  onChange={(e) => setPrintTheme(e.target.value)}
+                  title="Print & export style"
+                  style={{ padding: "6px 10px", borderRadius: 8, border: `1px solid ${RULE}`, background: SURFACE, color: INK, fontSize: 12, cursor: "pointer" }}
+                >
+                  {PRINT_THEMES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label} style
+                    </option>
+                  ))}
+                </select>
+              </div>
               <textarea
+                ref={docTextareaRef}
                 className="pc-docedit"
                 value={policyDoc}
                 onChange={(e) => {
@@ -889,6 +979,7 @@ function PolicyApp() {
               {isMobile
                 ? "Tap into the document to fix small things. Use the Chat tab for bigger rewrites. Everything saves automatically."
                 : "Click directly into the document to fix small things. Use chat on the left for bigger rewrites. Everything saves automatically."}
+              {" "}Bold/italic markers (**like this**) show as-is while editing, and appear properly formatted when you print or export.
             </p>
           </div>
           </div>
@@ -1054,9 +1145,154 @@ export default function App() {
         </div>
       </SignedOut>
       <SignedIn>
-        <PolicyApp />
+        <SubscriptionGate />
       </SignedIn>
     </>
+  );
+}
+
+function SubscriptionGate() {
+  const { getToken } = useAuth();
+  const [status, setStatus] = useState("checking"); // checking | active | inactive | error
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  async function authedFetch(url, options = {}) {
+    const token = await getToken();
+    return fetch(url, {
+      ...options,
+      headers: { ...(options.headers || {}), Authorization: token ? `Bearer ${token}` : "" },
+    });
+  }
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const res = await authedFetch("/api/subscription-status");
+      const data = await res.json();
+      setStatus(data.active ? "active" : "inactive");
+    } catch (e) {
+      setStatus("error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    checkStatus();
+  }, [checkStatus]);
+
+  // If we just came back from a successful Stripe checkout, the webhook may take
+  // a few seconds to arrive — recheck a handful of times rather than showing
+  // "not subscribed" prematurely.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout") !== "success") return;
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      checkStatus();
+      if (attempts >= 6) clearInterval(interval);
+    }, 2000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function startCheckout() {
+    setCheckoutLoading(true);
+    try {
+      const res = await authedFetch("/api/create-checkout-session", { method: "POST" });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setCheckoutLoading(false);
+      }
+    } catch (e) {
+      setCheckoutLoading(false);
+    }
+  }
+
+  async function openBillingPortal() {
+    setPortalLoading(true);
+    try {
+      const res = await authedFetch("/api/create-portal-session", { method: "POST" });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setPortalLoading(false);
+      }
+    } catch (e) {
+      setPortalLoading(false);
+    }
+  }
+
+  if (status === "checking") {
+    return (
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: LIGHT.PAPER }}>
+        <Loader2 size={20} color={LIGHT.MUTED} style={{ animation: "spin 1s linear infinite" }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (status === "active") {
+    return <PolicyApp onOpenBilling={openBillingPortal} billingLoading={portalLoading} />;
+  }
+
+  const justCancelled = new URLSearchParams(window.location.search).get("checkout") === "cancelled";
+
+  return (
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: LIGHT.PAPER,
+        fontFamily: "'Lexend', 'Inter', -apple-system, sans-serif",
+        padding: 20,
+      }}
+    >
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@200;300;400;500;600&display=swap'); @keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ maxWidth: 380, textAlign: "center" }}>
+        <div style={{ width: 44, height: 44, borderRadius: 12, background: LIGHT.ACCENT, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+          <FileText size={22} color="#fff" strokeWidth={2} />
+        </div>
+        <h1 style={{ fontSize: 22, fontWeight: 300, color: LIGHT.INK, margin: "0 0 8px" }}>Subscribe to Policy Editor</h1>
+        <p style={{ fontSize: 13.5, color: LIGHT.MUTED, lineHeight: 1.6, margin: "0 0 24px" }}>
+          {justCancelled
+            ? "No charge was made. Subscribe below whenever you're ready."
+            : "Unlimited policy rewrites, version history, and secure storage for your practice."}
+        </p>
+        <button
+          onClick={startCheckout}
+          disabled={checkoutLoading}
+          style={{
+            width: "100%",
+            padding: "13px 20px",
+            background: LIGHT.ACCENT,
+            color: "#fff",
+            border: "none",
+            borderRadius: 10,
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: checkoutLoading ? "not-allowed" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          {checkoutLoading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : null}
+          {checkoutLoading ? "Redirecting…" : "Subscribe"}
+        </button>
+        {status === "error" && (
+          <p style={{ fontSize: 12, color: "#C0392B", marginTop: 14 }}>
+            Couldn't check your subscription status. Try refreshing the page.
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1120,6 +1356,72 @@ function SharedPolicyView({ token }) {
       </div>
     </div>
   );
+}
+
+const PRINT_THEMES = [
+  {
+    id: "classic",
+    label: "Classic",
+    fontFamily: "Georgia, 'Times New Roman', serif",
+    fontSize: 12,
+    headerAlign: "center",
+  },
+  {
+    id: "modern",
+    label: "Modern",
+    fontFamily: "'Helvetica Neue', Arial, sans-serif",
+    fontSize: 11,
+    headerAlign: "left",
+  },
+  {
+    id: "compact",
+    label: "Compact",
+    fontFamily: "'Helvetica Neue', Arial, sans-serif",
+    fontSize: 10,
+    headerAlign: "left",
+    compact: true,
+  },
+];
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Converts our simple **bold** / *italic* markers into real <strong>/<em> tags.
+// Input is escaped first so this never introduces any injected HTML beyond
+// the strong/em tags we add ourselves.
+function markdownLiteToHtml(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+  return html;
+}
+
+// Splits a line of text into an array of { text, bold, italic } runs based on
+// the same **bold** / *italic* markers, for building a Word document.
+function markdownLiteToRuns(line) {
+  const runs = [];
+  const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(line)) !== null) {
+    if (match.index > lastIndex) {
+      runs.push({ text: line.slice(lastIndex, match.index) });
+    }
+    if (match[1]) {
+      runs.push({ text: match[2], bold: true });
+    } else if (match[3]) {
+      runs.push({ text: match[4], italics: true });
+    }
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < line.length) {
+    runs.push({ text: line.slice(lastIndex) });
+  }
+  return runs.length ? runs : [{ text: line }];
 }
 
 function iconBtn(ruleColor) {
