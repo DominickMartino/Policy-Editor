@@ -555,7 +555,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
             {dark ? <Sun size={14} color={MUTED} /> : <Moon size={14} color={MUTED} />}
           </button>
           <UserButton afterSignOutUrl="/" />
-          {!isMobile && (
+          {!isMobile && onOpenBilling && (
             <button
               className="pc-btn"
               onClick={onOpenBilling}
@@ -1145,7 +1145,9 @@ export default function App() {
         </div>
       </SignedOut>
       <SignedIn>
-        <SubscriptionGate />
+        {/* Subscription paywall temporarily disabled for testing.
+            Swap the line below back to <SubscriptionGate /> once Stripe is fully set up. */}
+        <PolicyApp />
       </SignedIn>
     </>
   );
