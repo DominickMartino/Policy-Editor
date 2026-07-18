@@ -119,7 +119,8 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
   const [mobileTab, setMobileTab] = useState("document"); // "chat" | "document" — only used on narrow screens
   const pendingVersionRef = useRef(null);
   const chatEndRef = useRef(null);
-  const docTextareaRef = useRef(null);
+  const docEditableRef = useRef(null);
+  const isInternalDocUpdateRef = useRef(false);
   const editFlashTimer = useRef(null);
   const abortRef = useRef(null);
   const cancelTokenRef = useRef(0);
@@ -152,6 +153,20 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Keep the editable document box showing whatever is in policyDoc — except when
+  // the change just came from the user's own typing in that same box, since in
+  // that case the DOM already reflects it and re-setting innerHTML would jump
+  // the cursor around.
+  useEffect(() => {
+    if (isInternalDocUpdateRef.current) {
+      isInternalDocUpdateRef.current = false;
+      return;
+    }
+    if (docEditableRef.current) {
+      docEditableRef.current.innerHTML = markdownLiteToHtml(policyDoc).replace(/\n/g, "<br>");
+    }
+  }, [policyDoc]);
 
   useEffect(() => {
     loadLibrary();
@@ -463,33 +478,61 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
     setMessages((m) => [...m, { role: "assistant", text: "Cancelled — the document wasn't changed." }]);
   }
 
-  function wrapSelection(marker) {
-    const el = docTextareaRef.current;
+  function applyFormat(command) {
+    const el = docEditableRef.current;
     if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    if (start === end) return; // nothing selected, do nothing
+    document.execCommand(command);
+    handleEditableInput(); // sync the change back into policyDoc right away
+  }
 
-    const before = policyDoc.slice(0, start);
-    const selected = policyDoc.slice(start, end);
-    const after = policyDoc.slice(end);
+  function htmlToMarkdownLite(root) {
+    let result = "";
+    let firstBlock = true;
 
-    // If the selection is already wrapped in this marker, unwrap it instead of double-wrapping.
-    const alreadyWrapped = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= marker.length * 2;
-    const newSelected = alreadyWrapped ? selected.slice(marker.length, selected.length - marker.length) : `${marker}${selected}${marker}`;
+    function walk(node, bold, italic) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        let text = node.textContent;
+        if (bold) text = `**${text}**`;
+        if (italic) text = `*${text}*`;
+        result += text;
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
 
-    const updated = before + newSelected + after;
-    setPolicyDoc(updated);
+      const tag = node.tagName;
+      if (tag === "BR") {
+        result += "\n";
+        return;
+      }
+      const isBlock = tag === "DIV" || tag === "P";
+      if (isBlock) {
+        if (!firstBlock) result += "\n";
+        firstBlock = false;
+      }
+
+      const nextBold = bold || tag === "B" || tag === "STRONG";
+      const nextItalic = italic || tag === "I" || tag === "EM";
+
+      for (const child of node.childNodes) {
+        walk(child, nextBold, nextItalic);
+      }
+    }
+
+    for (const child of root.childNodes) {
+      walk(child, false, false);
+    }
+    return result;
+  }
+
+  function handleEditableInput() {
+    const el = docEditableRef.current;
+    if (!el) return;
+    const text = htmlToMarkdownLite(el);
+    isInternalDocUpdateRef.current = true;
+    setPolicyDoc(text);
     setJustEdited(true);
     clearTimeout(editFlashTimer.current);
     editFlashTimer.current = setTimeout(() => setJustEdited(false), 1500);
-
-    // Restore focus and selection so the user can keep formatting more text.
-    requestAnimationFrame(() => {
-      el.focus();
-      const newEnd = before.length + newSelected.length;
-      el.setSelectionRange(before.length, newEnd);
-    });
   }
 
   function download() {
@@ -928,7 +971,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
                   <button
                     className="pc-btn"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => wrapSelection("**")}
+                    onClick={() => applyFormat("bold")}
                     title="Bold selected text"
                     style={{ ...iconBtn(RULE), width: 30 }}
                   >
@@ -937,7 +980,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
                   <button
                     className="pc-btn"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => wrapSelection("*")}
+                    onClick={() => applyFormat("italic")}
                     title="Italicize selected text"
                     style={{ ...iconBtn(RULE), width: 30 }}
                   >
@@ -971,51 +1014,24 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
               </div>
 
               <div
-                style={{
-                  border: `1px solid ${RULE}`,
-                  borderRadius: 10,
-                  padding: "16px 18px",
-                  marginBottom: 14,
-                  background: dark ? "#181A20" : "#FAFAFB",
-                }}
-              >
-                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: MUTED, marginBottom: 10 }}>
-                  Preview — how it'll print / export
-                </div>
-                <div
-                  style={{
-                    fontFamily: currentFont.family,
-                    fontSize: currentTheme.fontSize + 3,
-                    lineHeight: currentTheme.compact ? 1.4 : 1.7,
-                    color: INK,
-                    whiteSpace: "pre-wrap",
-                  }}
-                  dangerouslySetInnerHTML={{ __html: markdownLiteToHtml(policyDoc) }}
-                />
-              </div>
-
-              <textarea
-                ref={docTextareaRef}
+                ref={docEditableRef}
                 className="pc-docedit"
-                value={policyDoc}
-                onChange={(e) => {
-                  setPolicyDoc(e.target.value);
-                  setJustEdited(true);
-                  clearTimeout(editFlashTimer.current);
-                  editFlashTimer.current = setTimeout(() => setJustEdited(false), 1500);
-                }}
+                contentEditable
+                suppressContentEditableWarning
+                onInput={handleEditableInput}
                 spellCheck={true}
                 style={{
                   whiteSpace: "pre-wrap",
-                  fontSize: 14,
-                  lineHeight: 1.8,
+                  fontFamily: currentFont.family,
+                  fontSize: currentTheme.compact ? 13 : 14,
+                  lineHeight: currentTheme.compact ? 1.5 : 1.8,
                   color: INK,
                   margin: 0,
                   width: "100%",
                   minHeight: 420,
                   border: "none",
                   background: "transparent",
-                  resize: "vertical",
+                  outline: "none",
                   padding: 0,
                 }}
               />
@@ -1024,7 +1040,7 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
               {isMobile
                 ? "Tap into the document to fix small things. Use the Chat tab for bigger rewrites. Everything saves automatically."
                 : "Click directly into the document to fix small things. Use chat on the left for bigger rewrites. Everything saves automatically."}
-              {" "}Bold/italic markers (**like this**) show as-is while editing, and appear properly formatted when you print or export.
+              {" "}Select text and use Bold/Italic above to format it — changes appear immediately and carry through to print and export.
             </p>
           </div>
           </div>
