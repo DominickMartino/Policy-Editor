@@ -730,8 +730,8 @@ function PolicyApp({ onOpenBilling, billingLoading }) {
       )}
 
       {phase === "paste" && (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div style={{ width: "100%", maxWidth: 640 }}>
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", justifyContent: "center", padding: 24 }}>
+          <div style={{ width: "100%", maxWidth: 640, margin: "auto" }}>
             <h2 style={{ fontSize: 26, fontWeight: 200, letterSpacing: "-0.01em", margin: "0 0 8px" }}>Paste the policy you want to rewrite</h2>
             <p style={{ fontSize: 14, fontWeight: 300, color: MUTED, margin: "0 0 20px", lineHeight: 1.6 }}>
               Drop in the current version — even if it's rough or outdated. Then just tell it what to change, like you'd tell a colleague.
