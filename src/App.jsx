@@ -1201,7 +1201,7 @@ export default function App() {
               </div>
               <span style={{ fontSize: 19, fontWeight: 300, color: LIGHT.INK }}>Policy Editor</span>
             </div>
-            <SignIn routing="hash" />
+            <SignIn routing="hash" withSignUp />
           </div>
         </div>
       </SignedOut>
