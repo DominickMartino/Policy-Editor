@@ -5,12 +5,18 @@ let redis;
 function getClient() {
   if (!redis) {
     redis = new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: 2,
+      maxRetriesPerRequest: 3,
       connectTimeout: 8000,
-      enableOfflineQueue: false,
-      retryStrategy: () => null,
+      retryStrategy: (times) => Math.min(times * 200, 2000), // retry with backoff instead of giving up
     });
-    redis.on("error", (e) => console.error("Redis client error:", e.message));
+    redis.on("error", (e) => {
+      console.error("Redis client error:", e.message);
+      // If the connection is truly dead, drop the cached client so the next
+      // request builds a fresh one instead of reusing a broken connection.
+      if (e.message.includes("closed") || e.message.includes("ECONNRESET")) {
+        redis = null;
+      }
+    });
   }
   return redis;
 }
